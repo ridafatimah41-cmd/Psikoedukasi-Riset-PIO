@@ -1,0 +1,575 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { Battery, BatteryCharging, BatteryWarning, Heart, HeartHandshake, Smile, AlertCircle, Send, Users, ChevronRight, RefreshCcw } from 'lucide-react';
+
+// --- Firebase Initialization ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'jeda-sejenak-paud';
+
+// --- Game Data ---
+const EVENTS = [
+  {
+    dayName: "Senin",
+    challenge: "Anak tantrum tak mau ditinggal ibunya, sementara laporan Dapodik/RPPH harus selesai siang ini.",
+    batteryCost: 30,
+    validation: "Wajar jika kamu merasa sesak. Mengelola emosi orang lain sambil dituntut menuntaskan administrasi memang sangat menguras tenaga.",
+    crafting: {
+      cognitive: {
+        label: "Cognitive Crafting",
+        text: "Ubah sudut pandang: Laporan ini adalah peta berharga melihat tumbuh kembang anak.",
+        reward: 25,
+        feedback: "Bagus! Mengubah perspektif membantumu melihat makna di balik tumpukan kertas. Bateraimu sedikit pulih."
+      },
+      relational: {
+        label: "Relational Crafting",
+        text: "Minta bantuan rekan guru untuk mendampingi anak tersebut sebentar selagi kamu menenangkan diri.",
+        reward: 30,
+        feedback: "Langkah tepat! Meminta bantuan bukanlah tanda kelemahan, melainkan kolaborasi yang sehat."
+      }
+    }
+  },
+  {
+    dayName: "Selasa",
+    challenge: "Orang tua murid mengirim pesan komplain panjang di WhatsApp pada jam 8 malam.",
+    batteryCost: 25,
+    validation: "Ruang personalmu terlanggar. Merasa lelah saat waktu istirahat terganggu adalah hal yang sangat manusiawi.",
+    crafting: {
+      cognitive: {
+        label: "Cognitive Crafting",
+        text: "Ingatkan diri: Komplain ini bentuk kecemasan orang tua, bukan serangan personal. Aku akan membalasnya besok pagi.",
+        reward: 20,
+        feedback: "Membingkai ulang niat orang tua membantumu mengurangi beban emosional malam ini."
+      },
+      relational: {
+        label: "Relational Crafting",
+        text: "Menerapkan batas (Boundary): Mematikan notifikasi grup sekolah setelah jam 17:00 dan memberitahu aturan ini besok pagi.",
+        reward: 30,
+        feedback: "Luar biasa! Menetapkan batasan (boundaries) adalah kunci melindungi waktu istirahatmu."
+      }
+    }
+  },
+  {
+    dayName: "Rabu",
+    challenge: "Ada anak yang butuh pendampingan khusus karena tantrum parah, sementara murid lain mulai rewel minta diperhatikan.",
+    batteryCost: 30,
+    validation: "Kamu bukan pahlawan super yang bisa membelah diri. Kewalahan di situasi ini sangat normal.",
+    crafting: {
+      cognitive: {
+        label: "Cognitive Crafting",
+        text: "Fokus pada kendali: 'Aku hanya bisa melakukan satu hal dalam satu waktu. Keselamatan fisik anak adalah prioritas.'",
+        reward: 25,
+        feedback: "Melepaskan ilusi bahwa kamu harus mengendalikan semuanya membantumu bernapas lebih lega."
+      },
+      relational: {
+        label: "Relational Crafting",
+        text: "Meminta tolong kepala sekolah atau staf lain untuk mengambil alih kelas sementara waktu.",
+        reward: 30,
+        feedback: "Kerja tim yang baik! Lingkungan sekolah harus menjadi *support system*-mu."
+      }
+    }
+  },
+  {
+    dayName: "Kamis",
+    challenge: "Besok ada penilaian kinerja, tapi media pembelajaran belum selesai dan badan sudah sangat lelah.",
+    batteryCost: 20,
+    validation: "Tuntutan kesempurnaan seringkali membuat kita lupa bahwa fisik kita punya batas.",
+    crafting: {
+      cognitive: {
+        label: "Cognitive Crafting",
+        text: "Terima ketidaksempurnaan: 'Media seadanya yang dibawakan dengan bahagia jauh lebih baik daripada media sempurna tapi aku stres.'",
+        reward: 25,
+        feedback: "Kesempurnaan adalah musuh dari hal yang baik (good enough). Mentalmu jauh lebih penting!"
+      },
+      relational: {
+        label: "Relational Crafting",
+        text: "Besok, ajak anak-anak ikut membuat media pembelajaran sederhana di kelas sebagai bagian dari aktivitas seni.",
+        reward: 25,
+        feedback: "Kreatif! Mengubah beban menjadi aktivitas kolaboratif dengan anak-anak adalah langkah cerdas."
+      }
+    }
+  },
+  {
+    dayName: "Jumat",
+    challenge: "Tuntutan emotional labor: Harus terus tersenyum, bernyanyi, dan ceria seharian padahal suasana hatimu sedang hancur.",
+    batteryCost: 25,
+    validation: "Menyembunyikan perasaan asli demi profesionalitas itu berat. Sedihmu hari ini valid.",
+    crafting: {
+      cognitive: {
+        label: "Cognitive Crafting",
+        text: "Self-compassion: 'Aku izinkan diriku merasa sedih saat istirahat nanti. Sekarang, aku bermain sebagai pengalihan sejenak.'",
+        reward: 20,
+        feedback: "Memberi ruang untuk emosimu sendiri adalah bentuk kasih sayang pada diri sendiri."
+      },
+      relational: {
+        label: "Relational Crafting",
+        text: "Jujur pada rekan kerja: 'Hari ini aku lagi kurang fit mentalnya, boleh tolong bantu pimpin lagu yang heboh?'",
+        reward: 30,
+        feedback: "Hebat! Kerentanan (vulnerability) di depan rekan kerja yang dipercaya justru memperkuat hubungan."
+      }
+    }
+  }
+];
+
+export default function JedaSejenakApp() {
+  // --- Auth & Firebase State ---
+  const [user, setUser] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // --- Game State ---
+  // gameState: 'start', 'event', 'crafting', 'feedback', 'gameover', 'victory', 'lounge'
+  const [gameState, setGameState] = useState('start');
+  const [dayIndex, setDayIndex] = useState(0);
+  const [battery, setBattery] = useState(100);
+  const [feedbackData, setFeedbackData] = useState(null);
+
+  // --- Firebase Init ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // --- Firebase Data Fetching ---
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'lounge_messages'));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const msgs = [];
+        snapshot.forEach((doc) => msgs.push({ id: doc.id, ...doc.data() }));
+        // Sort client side, newest first based on timestamp (if exists) or fallback to local assumption
+        msgs.sort((a, b) => {
+          if (!a.timestamp || !b.timestamp) return 0;
+          return b.timestamp.toMillis() - a.timestamp.toMillis();
+        });
+        setMessages(msgs);
+      },
+      (error) => console.error("Error fetching messages:", error)
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Game Mechanics ---
+  const startGame = () => {
+    setBattery(100);
+    setDayIndex(0);
+    triggerNextDayEvent(0, 100);
+  };
+
+  const triggerNextDayEvent = (index, currentBattery) => {
+    const event = EVENTS[index];
+    const newBattery = Math.max(0, currentBattery - event.batteryCost);
+    
+    setBattery(newBattery);
+    setDayIndex(index);
+    setGameState('event');
+  };
+
+  const handleCraftingChoice = (type) => {
+    const event = EVENTS[dayIndex];
+    const choice = event.crafting[type];
+    
+    setBattery(prev => Math.min(100, prev + choice.reward));
+    setFeedbackData({
+      text: choice.feedback,
+      reward: choice.reward
+    });
+    setGameState('feedback');
+  };
+
+  const proceedFromFeedback = () => {
+    if (dayIndex >= EVENTS.length - 1) {
+      setGameState('victory');
+    } else {
+      triggerNextDayEvent(dayIndex + 1, battery);
+    }
+  };
+
+  const restartGame = () => {
+    setGameState('start');
+  };
+
+  const goToLounge = () => {
+    setGameState('lounge');
+  };
+
+  // --- Mading Actions ---
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !user) return;
+    
+    setIsSubmitting(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'lounge_messages'), {
+        text: newMessage.trim(),
+        userId: user.uid,
+        hugs: 0,
+        timestamp: serverTimestamp()
+      });
+      setNewMessage("");
+    } catch (err) {
+      console.error("Error adding message:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleHug = async (msgId, currentHugs) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'lounge_messages', msgId);
+      await updateDoc(docRef, { hugs: currentHugs + 1 });
+    } catch (err) {
+      console.error("Error hugging:", err);
+    }
+  };
+
+  // --- UI Helpers ---
+  const getBatteryColor = () => {
+    if (battery > 60) return 'bg-emerald-400';
+    if (battery > 25) return 'bg-amber-400';
+    return 'bg-rose-500';
+  };
+
+  // --- Render Views ---
+  const renderHeader = () => {
+    if (gameState === 'start' || gameState === 'gameover' || gameState === 'victory' || gameState === 'lounge') return null;
+    
+    return (
+      <div className="bg-white/80 backdrop-blur-sm p-4 sticky top-0 z-10 shadow-sm flex justify-between items-center border-b border-orange-100">
+        <div className="font-semibold text-orange-800 flex items-center gap-2">
+          <span className="bg-orange-200 px-3 py-1 rounded-full text-sm">
+            Hari {dayIndex + 1}: {EVENTS[dayIndex]?.dayName}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-sm font-medium text-slate-600">Energi:</div>
+          <div className="w-32 h-6 bg-slate-200 rounded-full overflow-hidden flex relative items-center justify-center">
+            <div 
+              className={`absolute top-0 left-0 h-full transition-all duration-500 ease-out ${getBatteryColor()}`} 
+              style={{ width: `${battery}%` }}
+            />
+            <span className="relative z-10 text-xs font-bold text-slate-800 drop-shadow-sm">{battery}%</span>
+          </div>
+          {battery <= 25 ? <BatteryWarning className="text-rose-500 w-6 h-6 animate-pulse" /> : <Battery className="text-emerald-600 w-6 h-6" />}
+        </div>
+      </div>
+    );
+  };
+
+  const renderStart = () => (
+    <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center animate-fade-in bg-gradient-to-br from-orange-50 to-rose-50">
+      <div className="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full border border-orange-100 relative overflow-hidden">
+        <div className="absolute top-[-50px] right-[-50px] opacity-10 pointer-events-none">
+           <Smile size={200} className="text-orange-500" />
+        </div>
+        
+        <h1 className="text-4xl font-extrabold text-orange-800 mb-4 tracking-tight">
+          Jeda Sejenak
+        </h1>
+        <h2 className="text-xl font-medium text-slate-600 mb-6 italic">Misi Merawat Senyum</h2>
+        
+        <div className="bg-orange-50 border border-orange-100 p-4 rounded-xl text-left mb-8 text-slate-700 leading-relaxed">
+          <p className="mb-3">Senyum sepanjang hari di kelas, tapi kosong & lelah saat pulang ke rumah? 🥺</p>
+          <p className="text-sm">
+            Menjadi guru PAUD itu membahagiakan, tapi jujur... sangat melelahkan, dan itu SANGAT WAJAR.
+            Di simulasi ini, kita akan berlatih bertahan dari kelelahan emosional menggunakan teknik <b>Job Crafting</b>.
+          </p>
+        </div>
+        
+        <button 
+          onClick={startGame}
+          className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 px-8 rounded-xl transition-all transform hover:scale-105 shadow-lg flex items-center justify-center gap-2 text-lg"
+        >
+          <HeartHandshake />
+          Mulai Simulasi
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderEvent = () => {
+    const event = EVENTS[dayIndex];
+    const isGameOverPending = battery <= 0;
+
+    return (
+      <div className="flex flex-col flex-1 p-6 animate-fade-in max-w-2xl mx-auto w-full">
+        <div className="bg-white rounded-3xl shadow-lg p-6 mb-6 border border-slate-100 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-2 bg-rose-400"></div>
+          <h3 className="text-xl font-bold text-slate-800 mb-2 flex items-center gap-2">
+            <AlertCircle className="text-rose-500" /> Situasi Hari Ini
+          </h3>
+          <p className="text-lg text-slate-700 leading-relaxed mb-6 font-medium">
+            "{event.challenge}"
+          </p>
+          
+          <div className="flex items-center gap-2 text-rose-600 font-semibold bg-rose-50 p-3 rounded-lg w-fit">
+            <BatteryWarning size={20} /> Energi terkuras: -{event.batteryCost}%
+          </div>
+        </div>
+
+        <div className="bg-indigo-50 rounded-2xl p-5 mb-8 border border-indigo-100 flex items-start gap-4 shadow-inner">
+          <div className="bg-indigo-100 p-2 rounded-full shrink-0">
+             <Heart className="text-indigo-500 w-6 h-6" />
+          </div>
+          <div>
+            <h4 className="font-semibold text-indigo-900 mb-1">Validasi Emosi</h4>
+            <p className="text-indigo-800 text-sm leading-relaxed">
+              {event.validation}
+            </p>
+          </div>
+        </div>
+
+        {isGameOverPending ? (
+          <button 
+            onClick={() => setGameState('gameover')}
+            className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex justify-center items-center gap-2"
+          >
+            Baterai Habis... <ChevronRight />
+          </button>
+        ) : (
+          <button 
+            onClick={() => setGameState('crafting')}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex justify-center items-center gap-2"
+          >
+            Cari Solusi (Job Crafting) <ChevronRight />
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderCrafting = () => {
+    const event = EVENTS[dayIndex];
+    return (
+      <div className="flex flex-col flex-1 p-6 animate-fade-in max-w-2xl mx-auto w-full">
+        <h3 className="text-2xl font-bold text-slate-800 mb-2">Pilih Strategimu</h3>
+        <p className="text-slate-600 mb-6">Bagaimana kamu akan merespons situasi ini untuk melindungi mentalmu?</p>
+
+        <div className="space-y-4">
+          <button 
+            onClick={() => handleCraftingChoice('cognitive')}
+            className="w-full text-left bg-white border-2 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50 rounded-2xl p-6 transition-all shadow-sm group"
+          >
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-bold text-emerald-600 tracking-wider uppercase">{event.crafting.cognitive.label}</span>
+              <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full font-bold group-hover:bg-emerald-200">+ Energi</span>
+            </div>
+            <p className="text-slate-700 font-medium leading-relaxed">"{event.crafting.cognitive.text}"</p>
+          </button>
+
+          <button 
+            onClick={() => handleCraftingChoice('relational')}
+            className="w-full text-left bg-white border-2 border-blue-200 hover:border-blue-400 hover:bg-blue-50 rounded-2xl p-6 transition-all shadow-sm group"
+          >
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-bold text-blue-600 tracking-wider uppercase">{event.crafting.relational.label}</span>
+              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold group-hover:bg-blue-200">+ Energi</span>
+            </div>
+            <p className="text-slate-700 font-medium leading-relaxed">"{event.crafting.relational.text}"</p>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderFeedback = () => (
+    <div className="flex flex-col flex-1 p-6 items-center justify-center animate-fade-in max-w-2xl mx-auto w-full text-center">
+      <div className="bg-emerald-50 w-24 h-24 rounded-full flex items-center justify-center mb-6 shadow-inner border-4 border-emerald-100">
+         <BatteryCharging className="text-emerald-500 w-12 h-12" />
+      </div>
+      <h3 className="text-2xl font-bold text-slate-800 mb-4">Energi Terisi! (+{feedbackData.reward}%)</h3>
+      <p className="text-lg text-slate-700 leading-relaxed mb-10 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+        {feedbackData.text}
+      </p>
+
+      <button 
+        onClick={proceedFromFeedback}
+        className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 px-10 rounded-xl transition-all shadow-lg"
+      >
+        {dayIndex >= EVENTS.length - 1 ? "Akhiri Minggu" : "Lanjut ke Hari Berikutnya"}
+      </button>
+    </div>
+  );
+
+  const renderGameOver = () => (
+    <div className="flex flex-col flex-1 items-center justify-center p-6 animate-fade-in bg-slate-900 text-center min-h-screen">
+       <BatteryWarning className="text-slate-500 w-24 h-24 mb-6" />
+       <h2 className="text-3xl font-bold text-white mb-4">Lelah Emosional Kronis (Burnout)</h2>
+       <div className="max-w-md mx-auto text-slate-300 leading-relaxed mb-10 space-y-4">
+         <p>Layar memudar abu-abu...</p>
+         <p>Saat baterai habis, pikiran untuk menyerah (*turnover intention*) mulai muncul. Menjadi guru terasa terlalu berat untuk ditanggung sendirian.</p>
+         <p className="font-semibold text-white">Tarik napas. Ini bukan akhir. Mari coba lagi dengan strategi yang berbeda.</p>
+       </div>
+       <button 
+        onClick={restartGame}
+        className="bg-white hover:bg-slate-200 text-slate-900 font-bold py-4 px-8 rounded-xl transition-all flex items-center gap-2 shadow-lg"
+      >
+        <RefreshCcw size={20} /> Coba Lagi
+      </button>
+    </div>
+  );
+
+  const renderVictory = () => (
+    <div className="flex flex-col flex-1 items-center justify-center p-6 animate-fade-in bg-gradient-to-br from-emerald-400 to-teal-500 min-h-screen text-center">
+      <div className="bg-white/20 p-6 rounded-full mb-6 backdrop-blur-sm">
+        <Smile className="text-white w-20 h-20" />
+      </div>
+      <h2 className="text-4xl font-extrabold text-white mb-4 drop-shadow-md">Selamat! 🎉</h2>
+      <div className="bg-white/95 p-6 rounded-2xl max-w-lg shadow-xl mb-8">
+        <p className="text-slate-700 text-lg leading-relaxed">
+          Kamu berhasil mencapai akhir pekan dengan senyum yang utuh! <br/><br/>
+          Kamu telah membuktikan bahwa dengan kesadaran mental dan praktik <b>Job Crafting</b> (menata pola pikir & relasi), kelelahan bisa dikelola sebelum menjadi <i>burnout</i>.
+        </p>
+      </div>
+      
+      <button 
+        onClick={goToLounge}
+        className="bg-white text-teal-600 hover:bg-teal-50 font-bold py-4 px-8 rounded-xl transition-all shadow-xl flex items-center gap-2 text-lg transform hover:-translate-y-1"
+      >
+        <Users size={24} /> Masuk ke Ruang Guru Virtual
+      </button>
+    </div>
+  );
+
+  const renderLounge = () => {
+    // Styling constants for sticky notes
+    const noteColors = ['bg-yellow-100', 'bg-blue-100', 'bg-pink-100', 'bg-green-100'];
+    const rotations = ['-rotate-2', 'rotate-2', '-rotate-1', 'rotate-3', '-rotate-3'];
+
+    return (
+      <div className="flex flex-col min-h-screen bg-[url('https://www.transparenttextures.com/patterns/cork-board.png')] bg-amber-900/10 p-4 sm:p-8 animate-fade-in">
+        <div className="max-w-4xl mx-auto w-full">
+          
+          {/* Header Lounge */}
+          <div className="bg-white/90 backdrop-blur-md p-6 rounded-2xl shadow-lg mb-8 border border-white/50">
+            <div className="flex items-center gap-3 justify-center mb-2">
+              <Users className="text-amber-600 w-8 h-8" />
+              <h2 className="text-2xl sm:text-3xl font-bold text-amber-800">Ruang Curhat Guru PAUD</h2>
+            </div>
+            <p className="text-center text-slate-600 text-sm sm:text-base">
+              "Hari ini, apa satu beban yang berhasil Ibu/Bapak lepaskan? Tinggalkan pesan untuk guru lain yang mungkin sedang lelah membaca ini. Pundak virtual kami siap untukmu."
+            </p>
+          </div>
+
+          {/* Form Mading */}
+          <form onSubmit={handleSendMessage} className="bg-yellow-50 p-4 sm:p-6 rounded-xl shadow-md mb-10 border border-yellow-200">
+            <textarea 
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              placeholder="Tulis refleksi atau semangatmu di sini..."
+              className="w-full p-4 rounded-lg border border-yellow-300 focus:ring-2 focus:ring-amber-400 focus:outline-none resize-none bg-white font-medium text-slate-700 min-h-[100px]"
+              maxLength={200}
+              disabled={isSubmitting || !user}
+            />
+            <div className="flex justify-between items-center mt-3">
+              <span className="text-xs text-slate-400">{newMessage.length}/200 karakter</span>
+              <button 
+                type="submit"
+                disabled={isSubmitting || !newMessage.trim() || !user}
+                className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm"
+              >
+                {isSubmitting ? 'Menempel...' : 'Tempel di Mading'} <Send size={16} />
+              </button>
+            </div>
+          </form>
+
+          {/* Mading Board (Grid of sticky notes) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 pb-20">
+            {messages.length === 0 ? (
+              <div className="col-span-full text-center text-slate-500 py-10 bg-white/50 rounded-xl">
+                Mading masih kosong. Jadilah yang pertama menempelkan pesan!
+              </div>
+            ) : (
+              messages.map((msg, index) => {
+                const colorClass = noteColors[index % noteColors.length];
+                const rotateClass = rotations[index % rotations.length];
+                
+                return (
+                  <div 
+                    key={msg.id} 
+                    className={`${colorClass} ${rotateClass} p-5 rounded-sm shadow-md flex flex-col justify-between min-h-[160px] transform hover:scale-105 hover:rotate-0 transition-all duration-300 ease-out border-t-8 border-t-yellow-300/30`}
+                    style={{
+                      backgroundImage: 'linear-gradient(transparent 95%, rgba(0,0,0,0.05) 100%)',
+                      backgroundSize: '100% 1.5rem'
+                    }}
+                  >
+                    <p className="text-slate-800 font-medium leading-relaxed mb-4 text-sm sm:text-base">
+                      {msg.text}
+                    </p>
+                    <div className="flex justify-between items-center mt-auto border-t border-black/5 pt-3">
+                      <span className="text-[10px] text-slate-500 font-semibold bg-white/40 px-2 py-1 rounded">Anonim</span>
+                      <button 
+                        onClick={() => handleHug(msg.id, msg.hugs || 0)}
+                        className="flex items-center gap-1.5 text-rose-500 bg-white/60 hover:bg-white px-2 py-1 rounded-full transition-colors shadow-sm text-xs font-bold"
+                      >
+                        <Heart size={14} className={msg.hugs > 0 ? "fill-rose-500" : ""} /> 
+                        {msg.hugs || 0} Peluk
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          
+          <div className="text-center mt-8 mb-12">
+            <button 
+                onClick={restartGame}
+                className="bg-white/80 hover:bg-white text-slate-700 font-bold py-3 px-6 rounded-full transition-all shadow-sm text-sm"
+            >
+                Kembali ke Menu Utama
+            </button>
+          </div>
+
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-orange-200 overflow-x-hidden">
+      {renderHeader()}
+      
+      <main className="flex-1 flex flex-col h-full w-full">
+        {gameState === 'start' && renderStart()}
+        {gameState === 'event' && renderEvent()}
+        {gameState === 'crafting' && renderCrafting()}
+        {gameState === 'feedback' && renderFeedback()}
+        {gameState === 'gameover' && renderGameOver()}
+        {gameState === 'victory' && renderVictory()}
+        {gameState === 'lounge' && renderLounge()}
+      </main>
+
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+          animation: fadeIn 0.4s ease-out forwards;
+        }
+      `}} />
+    </div>
+  );
+}
